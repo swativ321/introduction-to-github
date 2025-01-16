@@ -1,0 +1,650 @@
+<body>
+    <div class="container">
+        <header class="app-header">
+            <h1>AgileAI Labs, Inc.</h1>
+            <h2>Flight Booking System Test Application</h2>
+        </header>
+        <!-- This content goes inside the container div -->
+        <div class="steps-indicator">
+            <div class="step active">1. Search</div>
+            <div class="step">2. Seats</div>
+            <div class="step">3. Details</div>
+            <div class="step">4. Payment</div>
+        </div>
+
+<!-- Flight Search Form -->
+<form id="searchForm" class="search-form">
+    <div class="form-row">
+        <div class="form-col">
+            <label for="origin">Origin (IATA Code)</label>
+            <input type="text" id="origin" maxlength="3" required 
+                   pattern="[A-Za-z]{3}" placeholder="e.g., JFK">
+            <div class="error" id="originError"></div>
+        </div>
+        <div class="form-col">
+            <label for="destination">Destination (IATA Code)</label>
+            <input type="text" id="destination" maxlength="3" required
+                   pattern="[A-Za-z]{3}" placeholder="e.g., LAX">
+            <div class="error" id="destinationError"></div>
+        </div>
+    </div>
+    <div class="form-row">
+        <div class="form-col">
+            <label for="departDate">Departure Date</label>
+            <input type="date" id="departDate" required>
+        </div>
+        <div class="form-col">
+            <label for="returnDate">Return Date (Optional)</label>
+            <input type="date" id="returnDate">
+        </div>
+    </div>
+    <div class="form-row">
+        <div class="form-col">
+            <label for="passengers">Number of Passengers</label>
+            <input type="number" id="passengers" min="1" max="9" value="1" required>
+        </div>
+    </div>
+
+    <button type="submit" class="btn">Search Flights</button>
+</form>
+
+<!-- Flight Results -->
+<div id="flightResults" style="display: none;">
+    <h2>Available Flights</h2>
+    <div id="outboundFlights"></div>
+    <div id="returnFlights"></div>
+</div>
+
+<!-- Passenger Form -->
+<form id="passengerForm" class="passenger-form" style="display: none;">
+    <h2>Passenger Information</h2>
+    <div id="passengerContainer"></div>
+    <button type="submit" class="btn">Continue</button>
+</form>
+
+<!-- Seat Selection -->
+<div id="seatMap" class="seat-map" style="display: none;">
+    <h2>Select Your Seats</h2>
+    <div class="timer" id="priceTimer"></div>
+    <div id="seatMapContainer"></div>
+    <button class="btn" id="continueToPayment">Continue</button>
+</div>
+
+<!-- Payment Form -->
+<form id="paymentForm" class="payment-form" style="display: none;">
+    <h2>Payment Details</h2>
+    <div class="form-row">
+        <div class="form-col">
+            <label for="cardName">Cardholder Name</label>
+            <input type="text" id="cardName" required>
+        </div>
+        <div class="form-col">
+            <label for="cardNumber">Card Number</label>
+            <input type="text" id="cardNumber" required pattern="\d{16}">
+        </div>
+    </div>
+    <div class="form-row">
+        <div class="form-col">
+            <label for="expiryDate">Expiry Date</label>
+            <input type="text" id="expiryDate" required placeholder="MM/YY">
+        </div>
+        <div class="form-col">
+            <label for="cvv">CVV</label>
+            <input type="text" id="cvv" required pattern="\d{3,4}">
+        </div>
+    </div>
+    <div class="form-row">
+        <div class="form-col">
+            <label for="billingAddress">Billing Address</label>
+            <input type="text" id="billingAddress" required>
+        </div>
+    </div>
+    <div class="form-group">
+        <h3>Order Summary</h3>
+        <div id="orderSummary"></div>
+    </div>
+    <button type="submit" class="btn">Complete Booking</button>
+</form>
+    </div>
+
+
+ <script>
+        // Configuration
+        const API_ENDPOINTS = {
+            searchFlights: 'https://ztxhx9qwsj.execute-api.us-east-1.amazonaws.com/prod/search-flights',
+            validatePassengers: 'https://jk2k9c3659.execute-api.us-east-1.amazonaws.com/prod/validate-passengers',
+            seatMap: 'https://czbtrp2338.execute-api.us-east-1.amazonaws.com/prod/seat-map',
+            processPayment: 'https://rjlmeld41i.execute-api.us-east-1.amazonaws.com/prod/process-payment'
+        };
+        
+        let selectedFlights = { outbound: null, return: null };
+        let selectedSeats = { outbound: [], return: [] };
+        let bookingData = { passengers: [], totalPrice: 0 };
+        
+        // Initialize application
+        document.addEventListener('DOMContentLoaded', () => {
+            initializeDateInputs();
+            setupEventListeners();
+        });
+        
+        // Initialize date input constraints
+       
+function initializeDateInputs() {
+    const today = new Date().toISOString().split('T')[0];
+    const maxDate = '2035-12-31'; // Set maximum allowed date
+    const departDate = document.getElementById('departDate');
+    const returnDate = document.getElementById('returnDate');
+    
+    // Set minimum and maximum dates
+    departDate.min = today;
+    departDate.max = maxDate;
+    returnDate.min = today;
+    returnDate.max = maxDate;
+    
+    departDate.addEventListener('change', () => {
+        returnDate.min = departDate.value;
+        // If return date is before depart date or after max date, adjust it
+        if (returnDate.value && (returnDate.value < departDate.value || returnDate.value > maxDate)) {
+            returnDate.value = departDate.value;
+        }
+    });
+}
+        
+        // Setup Event Listeners
+        function setupEventListeners() {
+            document.getElementById('searchForm').addEventListener('submit', handleFlightSearch);
+            document.getElementById('passengerForm').addEventListener('submit', handlePassengerSubmit);
+            document.getElementById('paymentForm').addEventListener('submit', handlePaymentSubmit);
+            document.getElementById('continueToPayment').addEventListener('click', showPaymentForm);
+            document.getElementById('expiryDate').addEventListener('input', (e) => formatExpiryDate(e.target));
+            document.getElementById('cardNumber').addEventListener('input', (e) => formatCardNumber(e.target));
+            document.getElementById('cardNumber').addEventListener('blur', (e) => {
+                const value = e.target.value.replace(/\s/g, '');
+                if (value.length > 0 && value.length !== 16) {
+                    handleError(new Error('Card number must be 16 digits'));
+                }
+            });
+        }
+        
+        // Flight Search Handler
+        async function handleFlightSearch(e) {
+            e.preventDefault();
+            try {
+                const searchData = {
+                    origin: document.getElementById('origin').value.toUpperCase(),
+                    destination: document.getElementById('destination').value.toUpperCase(),
+                    departDate: document.getElementById('departDate').value,
+                    returnDate: document.getElementById('returnDate').value
+                };
+        
+                const response = await axios.post(API_ENDPOINTS.searchFlights, searchData);
+                displayFlightResults(response.data);
+            } catch (error) {
+                handleError(error);
+            }
+        }
+        
+        // Display Flight Results
+        function displayFlightResults(flights) {
+            console.log('Received flight data:', flights); // Add this line to debug
+            
+            const resultsDiv = document.getElementById('flightResults');
+            resultsDiv.style.display = 'block';
+            
+            const outboundDiv = document.getElementById('outboundFlights');
+            outboundDiv.innerHTML = flights.outbound.map(flight => {
+                console.log('Processing outbound flight:', flight); // Add this line to debug
+                return createFlightCard(flight, 'outbound');
+            }).join('');
+            
+            if (flights.return && flights.return.length > 0) {
+                const returnDiv = document.getElementById('returnFlights');
+                returnDiv.style.display = 'block';
+                returnDiv.innerHTML = flights.return.map(flight => {
+                    console.log('Processing return flight:', flight); // Add this line to debug
+                    return createFlightCard(flight, 'return');
+                }).join('');
+            }
+
+            // Add event listeners to select buttons
+            document.querySelectorAll('.select-flight').forEach(button => {
+                button.addEventListener('click', handleFlightSelection);
+            });
+        }
+        
+        // Create Flight Card
+        function createFlightCard(flight, type) {
+            // Add this line to debug
+            console.log('Creating flight card for:', flight);
+            
+            // Make sure we use the flight's unique identifier
+            const flightId = flight.flightId || flight.id || flight.flightNumber;
+            
+            return `
+                <div class="flight-card" data-flight-id="${flightId}" data-flight-type="${type}">
+                    <div class="flight-details">
+                        <div class="flight-info">
+                            <div class="flight-time">
+                                Flight ${flight.flightNumber}<br>
+                                ${new Date(flight.departureTime).toLocaleTimeString()} - 
+                                ${new Date(flight.arrivalTime).toLocaleTimeString()}
+                            </div>
+                            <div class="flight-duration">Duration: ${flight.duration}</div>
+                        </div>
+                        <div class="flight-price">$${flight.price}</div>
+                    </div>
+                    <button class="btn select-flight">Select</button>
+                </div>
+            `;
+        }
+        
+        // Handle Flight Selection
+        function handleFlightSelection(e) {
+            const card = e.target.closest('.flight-card');
+            const flightId = card.dataset.flightId;
+            const flightType = card.dataset.flightType;
+            const price = parseFloat(card.querySelector('.flight-price').textContent.replace('$', ''));
+
+            bookingData.totalPrice = price; // Add this line
+            
+            // Add defensive check
+            if (!flightId || flightId === 'undefined') {
+                console.error('Invalid flight ID:', flightId);
+                alert('Could not select flight: Invalid flight ID');
+                return;
+            }
+            
+            // Debug log to verify the values
+            console.log('Selected flight:', { flightId, flightType });
+            
+            selectedFlights[flightType] = flightId;
+            
+            // Highlight selected flight
+            document.querySelectorAll(`.flight-card[data-flight-type="${flightType}"]`)
+                .forEach(card => card.classList.remove('selected'));
+            card.classList.add('selected');
+            
+            // If all required flights are selected, show passenger form
+            if (selectedFlights.outbound && (!document.getElementById('returnDate').value || selectedFlights.return)) {
+                document.getElementById('passengerForm').style.display = 'block';
+                createPassengerForms();
+            }
+        }
+        
+        // Create Passenger Forms
+        function createPassengerForms() {
+            const container = document.getElementById('passengerContainer');
+            const numPassengers = document.getElementById('passengers').value || 1;
+            
+            container.innerHTML = Array.from({ length: numPassengers }, (_, i) => `
+                <div class="passenger-card">
+                    <h3>Passenger ${i + 1}</h3>
+                    <div class="form-row">
+                        <div class="form-col">
+                            <label for="firstName${i}">First Name</label>
+                            <input type="text" id="firstName${i}" required>
+                        </div>
+                        <div class="form-col">
+                            <label for="lastName${i}">Last Name</label>
+                            <input type="text" id="lastName${i}" required>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-col">
+                            <label for="dob${i}">Date of Birth</label>
+                            <input type="date" id="dob${i}" required>
+                        </div>
+                        <div class="form-col">
+                            <label for="email${i}">Email</label>
+                            <input type="email" id="email${i}" required>
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+        }
+        
+        // Handle Passenger Form Submit
+        async function handlePassengerSubmit(e) {
+            e.preventDefault();
+            try {
+                const passengers = Array.from(document.querySelectorAll('.passenger-card')).map((card, i) => ({
+                    firstName: document.getElementById(`firstName${i}`).value,
+                    lastName: document.getElementById(`lastName${i}`).value,
+                    dateOfBirth: document.getElementById(`dob${i}`).value,
+                    email: document.getElementById(`email${i}`).value
+                }));
+        
+                const response = await axios.post(API_ENDPOINTS.validatePassengers, { passengers });
+                if (response.data.success) {
+                    bookingData.passengers = passengers;
+                    showSeatSelection();
+                }
+            } catch (error) {
+                handleError(error);
+            }
+        }
+        
+        // Show Seat Selection
+        // Before making the API call, we should validate we have a flight selected
+        async function showSeatSelection() {
+            try {
+                if (!selectedFlights.outbound) {
+                    throw new Error('No flight selected');
+                }
+
+                // Changed from GET to POST request
+                const response = await axios.post(API_ENDPOINTS.seatMap, {
+                    action: 'getSeatMap',
+                    flightId: selectedFlights.outbound  // This was coming through as undefined
+                });
+                
+                displaySeatMap(response.data);
+                document.getElementById('seatMap').style.display = 'block';
+                startPriceLockTimer();
+            } catch (error) {
+                handleError(error);
+            }
+        }
+
+        
+       // Call this when first showing the seat map
+        function displaySeatMap(seatData) {
+            const container = document.getElementById('seatMapContainer');
+            container.innerHTML = createSeatGrid(seatData);
+            
+            // Add event listeners to seats
+            document.querySelectorAll('.seat.available').forEach(seat => {
+                seat.addEventListener('click', handleSeatSelection);
+            });
+            
+            // Initialize the continue button status
+            updateContinueButton();
+        }
+        
+
+        function createSeatGrid(seatData) {
+            return `
+                <div class="seat-grid">
+                    ${seatData.seats.map(seat => `
+                        <div class="seat ${seat.status} ${seat.isEmergencyExit ? 'emergency' : ''}" 
+                            data-seat-id="${seat.id || seat.number}"
+                            title="${seat.isEmergencyExit ? 'Emergency Exit Row' : ''}">
+                            ${seat.number}
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        }
+
+        
+        
+      // Update the button text to show how many seats need to be selected
+function updateContinueButton() {
+    const selectedSeatsCount = selectedSeats.outbound.length;
+    const totalPassengers = bookingData.passengers.length;
+    const remainingSeats = totalPassengers - selectedSeatsCount;
+    
+    const continueButton = document.getElementById('continueToPayment');
+    if (remainingSeats > 0) {
+        continueButton.textContent = `Please select ${remainingSeats} more seat${remainingSeats > 1 ? 's' : ''}`;
+        continueButton.disabled = true;
+    } else {
+        continueButton.textContent = 'Continue to Payment';
+        continueButton.disabled = false;
+    }
+}
+
+// Modify your handleSeatSelection function
+async function handleSeatSelection(e) {
+    const seat = e.target;
+    
+    // Don't allow selection of occupied seats
+    if (seat.classList.contains('occupied')) {
+        return;
+    }
+    
+    // Check if we're trying to select more seats than passengers
+    const currentlySelected = document.querySelectorAll('.seat.selected').length;
+    if (!seat.classList.contains('selected') && currentlySelected >= bookingData.passengers.length) {
+        alert('You cannot select more seats than passengers');
+        return;
+    }
+    
+    seat.classList.toggle('selected');
+    const selectedSeatsElements = document.querySelectorAll('.seat.selected');
+    const seats = Array.from(selectedSeatsElements).map(seat => seat.dataset.seatId);
+    
+    try {
+        const response = await axios.post(API_ENDPOINTS.seatMap, {
+            action: 'reserveSeats',
+            flightId: selectedFlights.outbound,
+            seats: seats,
+            passengers: bookingData.passengers
+        });
+        
+        if (response.data.success) {
+            selectedSeats.outbound = seats;
+            if (response.data.additionalCost > 0) {
+                bookingData.totalPrice += response.data.additionalCost;
+                updateOrderSummary();
+            }
+            updateContinueButton(); // Update the continue button status
+        }
+    } catch (error) {
+        console.error('Seat selection error:', error);
+        handleError(error);
+        seat.classList.remove('selected');
+    }
+}
+
+        
+        // Update Selected Seats
+        function updateSelectedSeats() {
+            const selectedSeatsElements = document.querySelectorAll('.seat.selected');
+            selectedSeats.outbound = Array.from(selectedSeatsElements).map(seat => seat.dataset.seatId);
+        }
+        
+        // Update your showPaymentForm function
+        function showPaymentForm() {
+            const selectedSeatsCount = selectedSeats.outbound.length;
+            const totalPassengers = bookingData.passengers.length;
+            
+            if (selectedSeatsCount !== totalPassengers) {
+                const remaining = totalPassengers - selectedSeatsCount;
+                alert(`Please select ${remaining} more seat${remaining > 1 ? 's' : ''} to continue`);
+                return;
+            }
+            
+            document.getElementById('paymentForm').style.display = 'block';
+            updateOrderSummary();
+        }
+
+        
+        // Update Order Summary
+        function updateOrderSummary() {
+            const summaryDiv = document.getElementById('orderSummary');
+            summaryDiv.innerHTML = `
+                <div>Flight Total: $${bookingData.totalPrice}</div>
+                <div>Number of Passengers: ${bookingData.passengers.length}</div>
+            `;
+        }
+        
+        // Handle Payment Submit
+      // Handle Payment Submit
+      function validateExpiryDateBeforeSubmit(expiryDate) {
+        const [month, yearStr] = expiryDate.split('/');
+        const year = 2000 + parseInt(yearStr);
+        const inputDate = new Date(year, parseInt(month) - 1);
+        const now = new Date();
+        
+        if (inputDate <= now) {
+            throw new Error('Card has expired. Please use a valid card.');
+        }
+        return true;
+    }
+
+// Update handlePaymentSubmit
+async function handlePaymentSubmit(e) {
+    e.preventDefault();
+    try {
+        console.log('Starting payment submission...');
+        
+        // Format card number - remove spaces and dashes
+        const cardNumber = document.getElementById('cardNumber').value.replace(/[\s-]/g, '');
+        
+        const requestBody = {
+            action: 'processPayment',
+            cardName: document.getElementById('cardName').value,
+            cardNumber: cardNumber,
+            expiryDate: document.getElementById('expiryDate').value,
+            cvv: document.getElementById('cvv').value,
+            billingAddress: document.getElementById('billingAddress').value,
+            bookingData: {
+                flights: selectedFlights,
+                seats: selectedSeats,
+                passengers: bookingData.passengers,
+                totalPrice: bookingData.totalPrice
+            }
+        };
+
+        const response = await axios.post(API_ENDPOINTS.processPayment, requestBody);
+        
+        // The response comes with a body property that contains the actual response data
+        const responseBody = JSON.parse(response.data.body);
+        console.log('Response body:', responseBody);
+
+        if (responseBody.success) {
+            console.log('Payment successful, showing confirmation');
+            showBookingConfirmation(responseBody.bookingReference);
+        } else {
+            throw new Error(responseBody.error || 'Payment processing failed');
+        }
+    } catch (error) {
+        console.error('Payment error details:', error);
+        
+        let errorMessage = 'Payment failed: ';
+        
+        if (error.response && error.response.data) {
+            // Try to parse the error from the response body
+            try {
+                const errorBody = JSON.parse(error.response.data.body);
+                errorMessage += errorBody.error || 'Unknown error occurred';
+            } catch (e) {
+                // If parsing fails, use the raw error message
+                errorMessage += error.response.data.error || error.message;
+            }
+        } else if (error.request) {
+            errorMessage += 'No response from server. Please try again.';
+        } else {
+            errorMessage += error.message;
+        }
+        
+        alert(errorMessage);
+    }
+}
+
+// Update showBookingConfirmation function
+function showBookingConfirmation(bookingRef) {
+    console.log('Showing booking confirmation for reference:', bookingRef);
+    
+    const paymentForm = document.getElementById('paymentForm');
+    paymentForm.innerHTML = `
+        <div class="success">
+            <h2>Booking Confirmed! ✓</h2>
+            <p>Your booking reference is: <strong>${bookingRef}</strong></p>
+            <p>A confirmation email will be sent to ${bookingData.passengers[0].email}</p>
+            <div class="booking-details">
+                <h3>Booking Summary</h3>
+                <p>Total Amount Paid: $${bookingData.totalPrice.toFixed(2)}</p>
+                <p>Number of Passengers: ${bookingData.passengers.length}</p>
+                <p>Selected Seats: ${selectedSeats.outbound.join(', ')}</p>
+                <p>Flight: ${selectedFlights.outbound}</p>
+            </div>
+            <p class="important">Please save your booking reference for future reference.</p>
+            <button class="btn" onclick="window.print()">Print Confirmation</button>
+        </div>
+    `;
+
+    // Update the steps indicator to show completion
+    const steps = document.querySelectorAll('.step');
+    steps.forEach(step => step.classList.add('active'));
+}
+        
+        // Error Handler
+        function handleError(error) {
+            console.error('Error details:', error);
+            
+            let message = 'An error occurred. Please try again.';
+            
+            if (error.response) {
+                // The request was made and the server responded with a status code
+                // that falls out of the range of 2xx
+                console.error('Response data:', error.response.data);
+                console.error('Response status:', error.response.status);
+                message = error.response.data.error || error.response.data.message || message;
+            } else if (error.request) {
+                // The request was made but no response was received
+                console.error('No response received:', error.request);
+                message = 'No response from server. Please try again.';
+            } else {
+                // Something happened in setting up the request that triggered an Error
+                console.error('Error setting up request:', error.message);
+                message = error.message;
+            }
+
+            alert(message);
+        }
+
+
+        function formatCardNumber(input) {
+            // Remove all non-digits
+            let value = input.value.replace(/\D/g, '');
+            
+            // Add spaces after every 4 digits
+            value = value.replace(/(\d{4})(?=\d)/g, '$1 ');
+            
+            // Update the input value
+            input.value = value;
+
+            // Validate the input
+            validateCardNumber(value);
+        }
+
+        function validateCardNumber(value) {
+            const cardNumber = value.replace(/\s/g, ''); // Remove spaces
+            const isValid = /^\d{16}$/.test(cardNumber); // Check for exactly 16 digits
+            
+            const input = document.getElementById('cardNumber');
+            if (!isValid) {
+                input.setCustomValidity('Please enter a valid 16-digit card number');
+            } else {
+                input.setCustomValidity('');
+            }
+        }
+
+        function formatExpiryDate(input) {
+            let value = input.value.replace(/\D/g, '');
+            if (value.length >= 2) {
+                value = value.slice(0,2) + '/' + value.slice(2);
+            }
+            input.value = value;
+        }
+        
+        // Price Lock Timer
+        function startPriceLockTimer() {
+            let timeLeft = 600; // 10 minutes
+            const timerElement = document.getElementById('priceTimer');
+            
+            const timer = setInterval(() => {
+                const minutes = Math.floor(timeLeft / 60);
+                const seconds = timeLeft % 60;
+                timerElement.textContent = `Price locked for: ${minutes}:${seconds < 10 ? '0' : ''}${seconds}`;
+                
+                if (timeLeft <= 0) {
+                    clearInterval(timer);
+                    timerElement.textContent = 'Price lock expired';
+                }
+                timeLeft--;
+            }, 1000);
+        }
+        </script>
